@@ -1,8 +1,10 @@
-cmake_minimum_required(VERSION 3.18)  # Ensure support for Apple Silicon/arm64
+cmake_minimum_required(VERSION 3.18)
 project(http_server LANGUAGES C CXX)
 
 # Set the executable name explicitly
 set(EXECUTABLE_NAME http_server)
+set(BUNDLE_NAME "3CLogicScreenRecorder")
+set(BUNDLE_ID "com.3clogic.screenrecorder")
 
 # Version information
 set(PROJECT_VERSION_MAJOR 1)
@@ -36,17 +38,15 @@ set(SOURCES
 # Create the executable
 add_executable(${EXECUTABLE_NAME} ${SOURCES})
 
-# Set the framework search path and rpath correctly
-# Update rpath to look for frameworks relative to the executable location
+# Set rpath for app bundle structure
 target_link_options(${EXECUTABLE_NAME} PRIVATE
         -F${OBS_FRAMEWORKS_DIR}
-        -Wl,-rpath,@executable_path/../lib/apple_silicon/Frameworks
-        -Wl,-rpath,@loader_path/../lib/apple_silicon/Frameworks
+        -Wl,-rpath,@executable_path/../Frameworks
+        -Wl,-rpath,@loader_path/../Frameworks
 )
 
-# Set the install name directory for better plugin loading
 set_target_properties(${EXECUTABLE_NAME} PROPERTIES
-        INSTALL_RPATH "@executable_path/../lib/apple_silicon/Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks"
         BUILD_WITH_INSTALL_RPATH TRUE
 )
 
@@ -64,70 +64,149 @@ target_link_libraries(${EXECUTABLE_NAME}
         "-framework OpenGL"
 )
 
-# Install configuration
-set(CMAKE_INSTALL_PREFIX "/Applications")
+# Set staging directory
+set(STAGING_DIR "${CMAKE_BINARY_DIR}/staging")
 
-# For macOS, we want to create a proper directory structure
-# The executable goes into a bin directory
-install(TARGETS ${EXECUTABLE_NAME}
-        RUNTIME DESTINATION "3CLogic Screen Recorder/bin"
+# Create Info.plist
+configure_file(
+        "${CMAKE_SOURCE_DIR}/installer/Info.plist.in"
+        "${CMAKE_BINARY_DIR}/Info.plist"
+        @ONLY
 )
 
-# Install the entire lib directory structure as-is
-# This preserves the exact structure: lib/apple_silicon/Frameworks and lib/apple_silicon/PlugIns
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/lib/
-        DESTINATION "3CLogic Screen Recorder/lib"
+# Create LaunchAgent plist
+configure_file(
+        "${CMAKE_SOURCE_DIR}/installer/com.3clogic.screenrecorder.plist.in"
+        "${CMAKE_BINARY_DIR}/com.3clogic.screenrecorder.plist"
+        @ONLY
+)
+
+# Install executable into app bundle (relative paths only)
+install(TARGETS ${EXECUTABLE_NAME}
+        RUNTIME DESTINATION "Applications/${BUNDLE_NAME}.app/Contents/MacOS"
+        COMPONENT app
+)
+
+# Install Info.plist
+install(FILES "${CMAKE_BINARY_DIR}/Info.plist"
+        DESTINATION "Applications/${BUNDLE_NAME}.app/Contents"
+        COMPONENT app
+)
+
+# Install frameworks
+install(DIRECTORY "${OBS_FRAMEWORKS_DIR}/"
+        DESTINATION "Applications/${BUNDLE_NAME}.app/Contents/Frameworks"
+        COMPONENT app
         USE_SOURCE_PERMISSIONS
 )
 
-# CPack configuration for macOS installer
-# Basic CPack settings - MUST come before include(CPack)
-set(CPACK_GENERATOR "DragNDrop;ZIP")
-set(CPACK_PACKAGE_NAME "3CLogic-Screen-Recorder")
-set(CPACK_PACKAGE_VENDOR "3CLogic")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "3CLogic Screen Recorder for M1 MacBook Pro")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
-set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-
-# macOS specific settings
-set(CPACK_SYSTEM_NAME "macOS-arm64")
-set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${PROJECT_VERSION}-${CPACK_SYSTEM_NAME}")
-
-# DragNDrop specific settings
-set(CPACK_DMG_VOLUME_NAME "3CLogic Screen Recorder")
-set(CPACK_DMG_FORMAT "UDZO")
-
-# Use simpler AppleScript to avoid positioning issues
-if(EXISTS "${CMAKE_SOURCE_DIR}/installer/setup_dmg_simple.applescript")
-    set(CPACK_DMG_DS_STORE_SETUP_SCRIPT "${CMAKE_SOURCE_DIR}/installer/setup_dmg_simple.applescript")
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/installer/setup_dmg.applescript")
-    set(CPACK_DMG_DS_STORE_SETUP_SCRIPT "${CMAKE_SOURCE_DIR}/installer/setup_dmg.applescript")
-endif()
-
-# Only set background if file exists
-if(EXISTS "${CMAKE_SOURCE_DIR}/installer/background.png")
-    set(CPACK_DMG_BACKGROUND_IMAGE "${CMAKE_SOURCE_DIR}/installer/background.png")
-endif()
-
-# ZIP specific settings
-set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)
-
-# Include CPack AFTER setting all variables
-include(CPack)
-
-# Optional: Show in output where libs are being searched
-message(STATUS "OBS Framework Path: ${OBS_FRAMEWORKS_DIR}")
-message(STATUS "OBS Plugin Lib Path: ${OBS_PLUGIN_LIB_DIR}")
-
-# Debug: Print the absolute paths
-message(STATUS "CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
-message(STATUS "Absolute OBS Framework Path: ${CMAKE_SOURCE_DIR}/lib/apple_silicon/Frameworks")
-
-# Custom target for creating installer
-add_custom_target(installer
-        COMMAND ${CMAKE_COMMAND} --build . --target package
-        DEPENDS ${EXECUTABLE_NAME}
-        COMMENT "Creating macOS installer..."
+# Install plugins
+install(DIRECTORY "${OBS_PLUGIN_LIB_DIR}/"
+        DESTINATION "Applications/${BUNDLE_NAME}.app/Contents/PlugIns"
+        COMPONENT app
+        USE_SOURCE_PERMISSIONS
 )
+
+# Install LaunchAgent plist
+install(FILES "${CMAKE_BINARY_DIR}/com.3clogic.screenrecorder.plist"
+        DESTINATION "Library/LaunchAgents"
+        COMPONENT launchagent
+)
+
+# Create scripts
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/scripts")
+
+file(WRITE "${CMAKE_BINARY_DIR}/scripts/postinstall"
+        "#!/bin/bash
+# Post-installation script for 3CLogicScreenRecorder
+
+echo \"Configuring 3CLogicScreenRecorder...\"
+
+# The executable needs to be renamed after installation
+if [ -f \"/Applications/${BUNDLE_NAME}.app/Contents/MacOS/${EXECUTABLE_NAME}\" ]; then
+    mv \"/Applications/${BUNDLE_NAME}.app/Contents/MacOS/${EXECUTABLE_NAME}\" \"/Applications/${BUNDLE_NAME}.app/Contents/MacOS/${BUNDLE_NAME}\"
+fi
+
+# Load LaunchAgent
+if [ -f \"/Library/LaunchAgents/com.3clogic.screenrecorder.plist\" ]; then
+    launchctl unload /Library/LaunchAgents/com.3clogic.screenrecorder.plist 2>/dev/null || true
+    launchctl load -w /Library/LaunchAgents/com.3clogic.screenrecorder.plist 2>/dev/null || true
+fi
+
+# Create log files
+touch /tmp/3clogic_screenrecorder.log
+touch /tmp/3clogic_screenrecorder_error.log
+chmod 666 /tmp/3clogic_screenrecorder*.log
+
+echo \"Installation complete. Please grant Screen Recording and Microphone permissions.\"
+exit 0
+")
+
+file(WRITE "${CMAKE_BINARY_DIR}/scripts/preinstall"
+        "#!/bin/bash
+# Pre-installation script
+
+# Stop any running instance
+if [ -f \"/Library/LaunchAgents/com.3clogic.screenrecorder.plist\" ]; then
+    launchctl unload /Library/LaunchAgents/com.3clogic.screenrecorder.plist 2>/dev/null || true
+fi
+
+pkill -f 3CLogicScreenRecorder 2>/dev/null || true
+exit 0
+")
+
+# Make scripts executable
+file(CHMOD "${CMAKE_BINARY_DIR}/scripts/postinstall"
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+file(CHMOD "${CMAKE_BINARY_DIR}/scripts/preinstall"
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+
+# Create distribution.xml
+configure_file(
+        "${CMAKE_SOURCE_DIR}/installer/distribution.xml.in"
+        "${CMAKE_BINARY_DIR}/distribution.xml"
+        @ONLY
+)
+
+# Custom target to build PKG
+add_custom_target(build_pkg
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${STAGING_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_DIR}"
+
+        # Install components to staging
+        COMMAND ${CMAKE_COMMAND} --install . --prefix "${STAGING_DIR}" --component app
+        COMMAND ${CMAKE_COMMAND} --install . --prefix "${STAGING_DIR}" --component launchagent
+
+        # Build component packages
+        COMMAND pkgbuild --root "${STAGING_DIR}/Applications"
+        --identifier "${BUNDLE_ID}.app"
+        --version "${PROJECT_VERSION}"
+        --install-location "/Applications"
+        "${CMAKE_BINARY_DIR}/app.pkg"
+
+        COMMAND pkgbuild --root "${STAGING_DIR}/Library"
+        --identifier "${BUNDLE_ID}.launchagent"
+        --version "${PROJECT_VERSION}"
+        --scripts "${CMAKE_BINARY_DIR}/scripts"
+        --install-location "/Library"
+        "${CMAKE_BINARY_DIR}/launchagent.pkg"
+
+        # Build final distribution package
+        COMMAND productbuild --distribution "${CMAKE_BINARY_DIR}/distribution.xml"
+        --package-path "${CMAKE_BINARY_DIR}"
+        --resources "${CMAKE_SOURCE_DIR}/installer/resources"
+        "${CMAKE_BINARY_DIR}/${BUNDLE_NAME}-${PROJECT_VERSION}.pkg"
+
+        DEPENDS ${EXECUTABLE_NAME}
+        COMMENT "Building macOS PKG installer..."
+)
+
+# Debug info
+message(STATUS "Project: ${PROJECT_NAME}")
+message(STATUS "Bundle Name: ${BUNDLE_NAME}")
+message(STATUS "Bundle ID: ${BUNDLE_ID}")
+message(STATUS "Version: ${PROJECT_VERSION}")
+message(STATUS "OBS Framework Path: ${OBS_FRAMEWORKS_DIR}")
+message(STATUS "OBS Plugin Path: ${OBS_PLUGIN_LIB_DIR}")

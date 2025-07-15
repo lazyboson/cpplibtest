@@ -1,2 +1,6 @@
 *.idea
 cmake-build-debug
+build
+.venv
+.DS_Store
+dist

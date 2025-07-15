@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2.0">
+    <title>3CLogicScreenRecorder</title>
+    <organization>com.3clogic</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+
+    <!-- Define the default installation -->
+    <choices-outline>
+        <line choice="default">
+            <line choice="@BUNDLE_ID@.app"/>
+            <line choice="@BUNDLE_ID@.launchagent"/>
+        </line>
+    </choices-outline>
+
+    <!-- Welcome message -->
+    <welcome file="welcome.rtf" mime-type="text/rtf"/>
+
+    <!-- License -->
+    <license file="license.rtf" mime-type="text/rtf"/>
+
+    <!-- Readme -->
+    <readme file="readme.rtf" mime-type="text/rtf"/>
+
+    <!-- Installation check -->
+    <installation-check script="pm_install_check();"/>
+    <script>
+    <![CDATA[
+        function pm_install_check() {
+            // Check for macOS 10.15 or later
+            if (system.compareVersions(system.version.ProductVersion, '10.15.0') < 0) {
+                my.result.title = 'macOS Version Error';
+                my.result.message = '3CLogicScreenRecorder requires macOS 10.15 or later.';
+                my.result.type = 'Fatal';
+                return false;
+            }
+
+            // Check for Apple Silicon or Intel
+            if (system.sysctl("hw.optional.arm64") == 1) {
+                // Apple Silicon Mac
+                return true;
+            } else {
+                my.result.title = 'Architecture Error';
+                my.result.message = '3CLogicScreenRecorder requires an Apple Silicon Mac.';
+                my.result.type = 'Fatal';
+                return false;
+            }
+        }
+    ]]>
+    </script>
+
+    <!-- Choice definitions -->
+    <choice id="default"/>
+
+    <choice id="@BUNDLE_ID@.app" visible="false">
+        <pkg-ref id="@BUNDLE_ID@.app"/>
+    </choice>
+
+    <choice id="@BUNDLE_ID@.launchagent" visible="false">
+        <pkg-ref id="@BUNDLE_ID@.launchagent"/>
+    </choice>
+
+    <!-- Package references -->
+    <pkg-ref id="@BUNDLE_ID@.app" version="@PROJECT_VERSION@" onConclusion="none">app.pkg</pkg-ref>
+    <pkg-ref id="@BUNDLE_ID@.launchagent" version="@PROJECT_VERSION@" onConclusion="none">launchagent.pkg</pkg-ref>
+
+    <!-- Product definition -->
+    <product id="@BUNDLE_ID@" version="@PROJECT_VERSION@"/>
+</installer-gui-script>

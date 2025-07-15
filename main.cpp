@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 #include <CoreGraphics/CoreGraphics.h>
-#include <signal.h>
+#include <csignal>
 
 using json = nlohmann::json;
 
@@ -53,14 +53,18 @@ class OBSRecorder {
     std::chrono::duration<double> total_paused_duration{0};
 
     static bool load_plugins() {
-        const std::string base_path = "/Applications/3CLogic Screen Recorder/lib/apple_silicon/PlugIns";
+        const std::string base_path = "/Applications/3CLogicScreenRecorder.app/Contents/PlugIns";
         const std::vector<std::string> plugins = {
             "mac-capture", "coreaudio-encoder", "obs-ffmpeg",
             "obs-outputs", "obs-x264", "rtmp-services"
         };
 
         for (const auto& plugin : plugins) {
-            std::string plugin_path = base_path + "/" + plugin + ".plugin/Contents/MacOS/" + plugin;
+            std::string plugin_path = base_path;
+            plugin_path.append("/")
+           .append(plugin)
+           .append(".plugin/Contents/MacOS/")
+           .append(plugin);
             obs_module_t* module = nullptr;
             if (obs_open_module(&module, plugin_path.c_str(), nullptr) == MODULE_SUCCESS && module) {
                 obs_init_module(module);
@@ -79,7 +83,7 @@ public:
         const auto time_t = std::chrono::system_clock::to_time_t(now);
         char timestamp[100];
         std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&time_t));
-        output_file = "recordings/" + stream_id + "_" + timestamp + ".mp4";
+        output_file = "/tmp/" + stream_id + "_" + timestamp + ".mp4";
     }
 
     ~OBSRecorder() {
@@ -104,12 +108,12 @@ public:
 
         // Get M1 MacBook Pro native display info
         CGDirectDisplayID main_display = CGMainDisplayID();
-        size_t pixel_width = CGDisplayPixelsWide(main_display);
-        size_t pixel_height = CGDisplayPixelsHigh(main_display);
-        CGRect bounds = CGDisplayBounds(main_display);
-        size_t logical_width = (size_t)bounds.size.width;
-        size_t logical_height = (size_t)bounds.size.height;
-        CGFloat scale_factor = (CGFloat)pixel_width / (CGFloat)logical_width;
+        const size_t pixel_width = CGDisplayPixelsWide(main_display);
+        const size_t pixel_height = CGDisplayPixelsHigh(main_display);
+        const auto [origin, size] = CGDisplayBounds(main_display);
+        const auto logical_width = static_cast<size_t>(size.width);
+        const auto logical_height = static_cast<size_t>(size.height);
+        const CGFloat scale_factor = static_cast<CGFloat>(pixel_width) / static_cast<CGFloat>(logical_width);
 
         std::cout << "=== M1 MacBook Pro Display Info ===" << std::endl;
         std::cout << "Logical resolution: " << logical_width << "x" << logical_height << " points" << std::endl;
@@ -142,7 +146,7 @@ public:
         ovi.gpu_conversion = true;
         ovi.scale_type = OBS_SCALE_BICUBIC;
 
-        std::string opengl_path = "/Applications/3CLogic Screen Recorder/lib/apple_silicon/Frameworks/libobs-opengl.dylib";
+        std::string opengl_path = "/Applications/3CLogicScreenRecorder.app/Contents/Frameworks/libobs-opengl.dylib";
         ovi.graphics_module = opengl_path.c_str();
 
         if (obs_reset_video(&ovi) != OBS_VIDEO_SUCCESS) {
@@ -222,7 +226,7 @@ public:
         // Video encoder optimized for M1 MacBook Pro
         obs_data_t* video_settings = obs_data_create();
 
-        struct obs_video_info ovi;
+        struct obs_video_info ovi{};
         obs_get_video_info(&ovi);
         int pixels = ovi.output_width * ovi.output_height;
         int bitrate;
@@ -289,9 +293,6 @@ public:
         if (state != StreamState::IDLE) {
             return false;
         }
-
-        // Create output directory if it doesn't exist
-        system("mkdir -p recordings");
 
         // Create MP4 output
         obs_data_t* output_settings = obs_data_create();
@@ -738,7 +739,7 @@ public:
         std::cout << "  GET    /v1/stream/{streamId}/status" << std::endl;
         std::cout << "  GET    /v1/streams" << std::endl;
         std::cout << "  GET    /health" << std::endl;
-        std::cout << "\nRecordings will be saved to: ./recordings/" << std::endl;
+        std::cout << "\nRecordings will be saved to: /tmp/" << std::endl;
         std::cout << "Press Ctrl+C to stop the server" << std::endl;
 
         server->listen(host, port);

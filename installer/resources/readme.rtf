@@ -1,0 +1,81 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2709
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;\f2\fmodern\fcharset0 Courier;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0\b\fs28 \cf0 Post-Installation Instructions
+\f1\b0\fs24 \
+\
+
+\f0\b IMPORTANT: Grant Required Permissions
+\f1\b0 \
+\
+After installation, you must grant the following permissions for 3CLogicScreenRecorder to function:\
+\
+1.
+\f0\b Screen Recording Permission:
+\f1\b0 \
+   \'95 Open System Preferences > Security & Privacy > Privacy\
+   \'95 Select "Screen Recording" from the left sidebar\
+   \'95 Check the box next to "3CLogicScreenRecorder"\
+   \'95 You may need to click the lock icon and enter your password\
+\
+2.
+\f0\b Microphone Permission:
+\f1\b0 \
+   \'95 In the same Privacy settings\
+   \'95 Select "Microphone" from the left sidebar\
+   \'95 Check the box next to "3CLogicScreenRecorder"\
+\
+
+\f0\b Verifying Installation
+\f1\b0 \
+\
+To verify that 3CLogicScreenRecorder is running:\
+\
+1. Open Terminal\
+2. Run:
+\f2 launchctl list | grep 3clogic
+\f1 \
+3. You should see the service listed\
+\
+
+\f0\b Log Files
+\f1\b0 \
+\
+Logs are available at:\
+\'95
+\f2 /tmp/3clogic_screenrecorder.log
+\f1 \
+\'95
+\f2 /tmp/3clogic_screenrecorder_error.log
+\f1 \
+\
+
+\f0\b Uninstalling
+\f1\b0 \
+\
+To uninstall 3CLogicScreenRecorder:\
+\
+1. Stop the service:\
+
+\f2 sudo launchctl unload /Library/LaunchAgents/com.3clogic.screenrecorder.plist
+\f1 \
+\
+2. Remove the application:\
+
+\f2 sudo rm -rf "/Applications/3CLogicScreenRecorder.app"
+\f1 \
+\
+3. Remove the LaunchAgent:\
+
+\f2 sudo rm /Library/LaunchAgents/com.3clogic.screenrecorder.plist
+\f1 \
+\
+
+\f0\b Support
+\f1\b0 \
+\
+For support, please contact: support@3clogic.com}

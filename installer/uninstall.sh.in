@@ -1,0 +1,21 @@
+#!/bin/bash
+
+echo "Uninstalling @BUNDLE_NAME@..."
+
+# Stop and unload the LaunchAgent
+if [ -f "/Library/LaunchAgents/@BUNDLE_ID@.plist" ]; then
+    echo "Stopping service..."
+    launchctl unload "/Library/LaunchAgents/@BUNDLE_ID@.plist" 2>/dev/null || true
+    sudo rm -f "/Library/LaunchAgents/@BUNDLE_ID@.plist"
+fi
+
+# Remove the application
+if [ -d "/Applications/@BUNDLE_NAME@.app" ]; then
+    echo "Removing application..."
+    sudo rm -rf "/Applications/@BUNDLE_NAME@.app"
+fi
+
+# Remove log files
+rm -f /tmp/3clogic_screenrecorder*.log
+
+echo "Uninstallation complete."
