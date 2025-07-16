@@ -1,6 +1,5 @@
-// obs_mp4_capture_api.cpp - OBS screen capture with REST API and MP4 recording for M1 MacBook Pro
+// obs_mp4_capture_api_singleton.cpp - OBS screen capture with REST API and MP4 recording using singleton pattern
 #include "third_party/obs/include/obs.h"
-#include "third_party/obs/include/obs-module.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -33,24 +32,23 @@ enum class StreamState {
     STOPPED
 };
 
-class OBSRecorder {
-    obs_source_t* screen_capture = nullptr;
-    obs_source_t* mic_capture = nullptr;
-    obs_source_t* desktop_audio = nullptr;
-    obs_scene_t* scene = nullptr;
-    obs_sceneitem_t* scene_item = nullptr;
-    obs_output_t* output = nullptr;
-    obs_encoder_t* video_encoder = nullptr;
-    obs_encoder_t* audio_encoder = nullptr;
+// Singleton OBS Core Manager
+class OBSCore {
+private:
+    static std::unique_ptr<OBSCore> instance;
+    static std::mutex instance_mutex;
 
-    std::string stream_id;
-    std::string output_file;
-    std::atomic<StreamState> state{StreamState::IDLE};
-    std::mutex state_mutex;
-    std::thread recording_thread;
-    std::chrono::steady_clock::time_point start_time;
-    std::chrono::steady_clock::time_point pause_time;
-    std::chrono::duration<double> total_paused_duration{0};
+    bool initialized = false;
+    std::mutex core_mutex;
+
+    // Display info
+    size_t pixel_width = 0;
+    size_t pixel_height = 0;
+    size_t logical_width = 0;
+    size_t logical_height = 0;
+    CGFloat scale_factor = 0;
+
+    OBSCore() = default;
 
     static bool load_plugins() {
         const std::string base_path = "/Applications/3CLogicScreenRecorder.app/Contents/PlugIns";
@@ -77,24 +75,23 @@ class OBSRecorder {
     }
 
 public:
-    explicit OBSRecorder(std::string  id) : stream_id(std::move(id)) {
-        // Generate output filename based on stream ID and timestamp
-        const auto now = std::chrono::system_clock::now();
-        const auto time_t = std::chrono::system_clock::to_time_t(now);
-        char timestamp[100];
-        std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&time_t));
-        output_file = "/tmp/" + stream_id + "_" + timestamp + ".mp4";
+    ~OBSCore() {
+        shutdown();
     }
 
-    ~OBSRecorder() {
-        cleanup();
+    static OBSCore* getInstance() {
+        std::lock_guard<std::mutex> lock(instance_mutex);
+        if (!instance) {
+            instance = std::unique_ptr<OBSCore>(new OBSCore());
+        }
+        return instance.get();
     }
 
     bool initialize() {
-        std::lock_guard<std::mutex> lock(state_mutex);
+        std::lock_guard<std::mutex> lock(core_mutex);
 
-        if (state != StreamState::IDLE) {
-            return false;
+        if (initialized) {
+            return true;
         }
 
         // Initialize OBS
@@ -108,12 +105,12 @@ public:
 
         // Get M1 MacBook Pro native display info
         CGDirectDisplayID main_display = CGMainDisplayID();
-        const size_t pixel_width = CGDisplayPixelsWide(main_display);
-        const size_t pixel_height = CGDisplayPixelsHigh(main_display);
+        pixel_width = CGDisplayPixelsWide(main_display);
+        pixel_height = CGDisplayPixelsHigh(main_display);
         const auto [origin, size] = CGDisplayBounds(main_display);
-        const auto logical_width = static_cast<size_t>(size.width);
-        const auto logical_height = static_cast<size_t>(size.height);
-        const CGFloat scale_factor = static_cast<CGFloat>(pixel_width) / static_cast<CGFloat>(logical_width);
+        logical_width = static_cast<size_t>(size.width);
+        logical_height = static_cast<size_t>(size.height);
+        scale_factor = static_cast<CGFloat>(pixel_width) / static_cast<CGFloat>(logical_width);
 
         std::cout << "=== M1 MacBook Pro Display Info ===" << std::endl;
         std::cout << "Logical resolution: " << logical_width << "x" << logical_height << " points" << std::endl;
@@ -151,6 +148,7 @@ public:
 
         if (obs_reset_video(&ovi) != OBS_VIDEO_SUCCESS) {
             std::cerr << "Failed to initialize video with M1 MacBook Pro settings" << std::endl;
+            obs_shutdown();
             return false;
         }
 
@@ -161,74 +159,35 @@ public:
 
         if (!obs_reset_audio(&oai)) {
             std::cerr << "Failed to initialize audio" << std::endl;
+            obs_shutdown();
             return false;
         }
 
-        std::cout << "M1 MacBook Pro video/audio initialized successfully!" << std::endl;
+        initialized = true;
+        std::cout << "OBS Core initialized successfully!" << std::endl;
         return true;
     }
 
-    bool setup_sources() {
-        // Create scene
-        scene = obs_scene_create("Recording Scene");
-        if (!scene) return false;
-
-        // Create screen capture
-        obs_data_t* screen_settings = obs_data_create();
-        obs_data_set_bool(screen_settings, "show_cursor", true);
-        obs_data_set_int(screen_settings, "display", 0);
-
-        screen_capture = obs_source_create("screen_capture", "Screen",
-                                         screen_settings, nullptr);
-        obs_data_release(screen_settings);
-
-        if (!screen_capture) {
-            std::cerr << "Failed to create screen capture" << std::endl;
-            return false;
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(core_mutex);
+        if (initialized) {
+            obs_shutdown();
+            initialized = false;
+            std::cout << "OBS Core shutdown complete" << std::endl;
         }
-
-        // Add to scene
-        scene_item = obs_scene_add(scene, screen_capture);
-        if (scene_item) {
-            struct vec2 bounds{};
-            struct obs_video_info ovi{};
-            obs_get_video_info(&ovi);
-            bounds.x = static_cast<float>(ovi.base_width);
-            bounds.y = static_cast<float>(ovi.base_height);
-            obs_sceneitem_set_bounds(scene_item, &bounds);
-            obs_sceneitem_set_bounds_type(scene_item, OBS_BOUNDS_SCALE_INNER);
-            struct vec2 scale = {1.0f, 1.0f};
-            obs_sceneitem_set_scale(scene_item, &scale);
-        }
-
-        // Create audio sources
-        obs_data_t* desktop_settings = obs_data_create();
-        desktop_audio = obs_source_create("coreaudio_output_capture",
-                                        "Desktop Audio", desktop_settings, nullptr);
-        obs_data_release(desktop_settings);
-
-        obs_data_t* mic_settings = obs_data_create();
-        obs_data_set_string(mic_settings, "device_id", "default");
-        mic_capture = obs_source_create("coreaudio_input_capture",
-                                      "Microphone", mic_settings, nullptr);
-        obs_data_release(mic_settings);
-
-        // Set output sources
-        obs_source_t* scene_source = obs_scene_get_source(scene);
-        obs_set_output_source(0, scene_source);
-        if (mic_capture) obs_set_output_source(1, mic_capture);
-        if (desktop_audio) obs_set_output_source(2, desktop_audio);
-
-        return true;
     }
 
-    bool setup_encoding() {
-        // Video encoder optimized for M1 MacBook Pro
-        obs_data_t* video_settings = obs_data_create();
+    bool isInitialized() const {
+        return initialized;
+    }
 
-        struct obs_video_info ovi{};
-        obs_get_video_info(&ovi);
-        int pixels = ovi.output_width * ovi.output_height;
+    void getVideoInfo(size_t& width, size_t& height) const {
+        width = pixel_width;
+        height = pixel_height;
+    }
+
+    int calculateBitrate() const {
+        int pixels = pixel_width * pixel_height;
         int bitrate;
 
         // Bitrate calculation for MP4 recording (higher quality than streaming)
@@ -244,6 +203,123 @@ public:
             bitrate = 5000;  // 5 Mbps fallback
         }
 
+        return bitrate;
+    }
+};
+
+// Initialize static members
+std::unique_ptr<OBSCore> OBSCore::instance = nullptr;
+std::mutex OBSCore::instance_mutex;
+
+// Stream Recorder class that uses the singleton OBS instance
+class StreamRecorder {
+private:
+    // Each recorder has its own scene and output
+    obs_source_t* screen_capture = nullptr;
+    obs_source_t* mic_capture = nullptr;
+    obs_source_t* desktop_audio = nullptr;
+    obs_scene_t* scene = nullptr;
+    obs_sceneitem_t* scene_item = nullptr;
+    obs_output_t* output = nullptr;
+    obs_encoder_t* video_encoder = nullptr;
+    obs_encoder_t* audio_encoder = nullptr;
+
+    std::string stream_id;
+    std::string output_file;
+    std::atomic<StreamState> state{StreamState::IDLE};
+    std::mutex state_mutex;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point pause_time;
+    std::chrono::duration<double> total_paused_duration{0};
+
+    // Track which output channels we're using
+    int video_channel = -1;
+    int audio_channel = -1;
+    int desktop_channel = -1;
+
+    // Static channel allocation (simple round-robin)
+    static std::mutex channel_mutex;
+    static std::vector<bool> used_channels;
+
+public:
+    explicit StreamRecorder(std::string id) : stream_id(std::move(id)) {
+        // Generate output filename based on stream ID and timestamp
+        const auto now = std::chrono::system_clock::now();
+        const auto time_t = std::chrono::system_clock::to_time_t(now);
+        char timestamp[100];
+        std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", std::localtime(&time_t));
+        output_file = "/tmp/" + stream_id + "_" + timestamp + ".mp4";
+    }
+
+    ~StreamRecorder() {
+        cleanup();
+    }
+
+    bool setup_sources() {
+        // Create scene
+        scene = obs_scene_create(("Recording Scene " + stream_id).c_str());
+        if (!scene) return false;
+
+        // Create screen capture
+        obs_data_t* screen_settings = obs_data_create();
+        obs_data_set_bool(screen_settings, "show_cursor", true);
+        obs_data_set_int(screen_settings, "display", 0);
+
+        screen_capture = obs_source_create("screen_capture",
+                                         ("Screen " + stream_id).c_str(),
+                                         screen_settings, nullptr);
+        obs_data_release(screen_settings);
+
+        if (!screen_capture) {
+            std::cerr << "Failed to create screen capture for stream: " << stream_id << std::endl;
+            return false;
+        }
+
+        // Add to scene
+        scene_item = obs_scene_add(scene, screen_capture);
+        if (scene_item) {
+            struct vec2 bounds{};
+            size_t width, height;
+            OBSCore::getInstance()->getVideoInfo(width, height);
+            bounds.x = static_cast<float>(width);
+            bounds.y = static_cast<float>(height);
+            obs_sceneitem_set_bounds(scene_item, &bounds);
+            obs_sceneitem_set_bounds_type(scene_item, OBS_BOUNDS_SCALE_INNER);
+            struct vec2 scale = {1.0f, 1.0f};
+            obs_sceneitem_set_scale(scene_item, &scale);
+        }
+
+        // Create audio sources
+        obs_data_t* desktop_settings = obs_data_create();
+        desktop_audio = obs_source_create("coreaudio_output_capture",
+                                        ("Desktop Audio " + stream_id).c_str(),
+                                        desktop_settings, nullptr);
+        obs_data_release(desktop_settings);
+
+        obs_data_t* mic_settings = obs_data_create();
+        obs_data_set_string(mic_settings, "device_id", "default");
+        mic_capture = obs_source_create("coreaudio_input_capture",
+                                      ("Microphone " + stream_id).c_str(),
+                                      mic_settings, nullptr);
+        obs_data_release(mic_settings);
+
+        // Allocate output channels
+        allocate_channels();
+
+        // Set output sources
+        obs_source_t* scene_source = obs_scene_get_source(scene);
+        obs_set_output_source(video_channel, scene_source);
+        if (mic_capture && audio_channel >= 0) obs_set_output_source(audio_channel, mic_capture);
+        if (desktop_audio && desktop_channel >= 0) obs_set_output_source(desktop_channel, desktop_audio);
+
+        return true;
+    }
+
+    bool setup_encoding() {
+        // Video encoder optimized for M1 MacBook Pro
+        obs_data_t* video_settings = obs_data_create();
+        int bitrate = OBSCore::getInstance()->calculateBitrate();
+
         obs_data_set_int(video_settings, "bitrate", bitrate);
         obs_data_set_string(video_settings, "preset", "medium");
         obs_data_set_string(video_settings, "profile", "high");
@@ -256,14 +332,15 @@ public:
         obs_data_set_bool(video_settings, "psycho_aq", true);
         obs_data_set_int(video_settings, "bf", 2);
 
-        std::cout << "Video bitrate for MP4: " << bitrate << " kbps" << std::endl;
+        std::cout << "Video bitrate for MP4 (" << stream_id << "): " << bitrate << " kbps" << std::endl;
 
-        video_encoder = obs_video_encoder_create("obs_x264", "Video Encoder",
+        video_encoder = obs_video_encoder_create("obs_x264",
+                                               ("Video Encoder " + stream_id).c_str(),
                                                video_settings, nullptr);
         obs_data_release(video_settings);
 
         if (!video_encoder) {
-            std::cerr << "Failed to create video encoder" << std::endl;
+            std::cerr << "Failed to create video encoder for stream: " << stream_id << std::endl;
             return false;
         }
 
@@ -272,12 +349,13 @@ public:
         obs_data_set_int(audio_settings, "bitrate", 320); // High quality audio for recording
         obs_data_set_int(audio_settings, "rate_control", 0);
 
-        audio_encoder = obs_audio_encoder_create("CoreAudio_AAC", "Audio Encoder",
+        audio_encoder = obs_audio_encoder_create("CoreAudio_AAC",
+                                               ("Audio Encoder " + stream_id).c_str(),
                                                audio_settings, 0, nullptr);
         obs_data_release(audio_settings);
 
         if (!audio_encoder) {
-            std::cerr << "Failed to create audio encoder" << std::endl;
+            std::cerr << "Failed to create audio encoder for stream: " << stream_id << std::endl;
             return false;
         }
 
@@ -298,12 +376,12 @@ public:
         obs_data_t* output_settings = obs_data_create();
         obs_data_set_string(output_settings, "path", output_file.c_str());
 
-        output = obs_output_create("mp4_output", "Recording",
+        output = obs_output_create("mp4_output", ("Recording " + stream_id).c_str(),
                                  output_settings, nullptr);
         obs_data_release(output_settings);
 
         if (!output) {
-            std::cerr << "Failed to create MP4 output" << std::endl;
+            std::cerr << "Failed to create MP4 output for stream: " << stream_id << std::endl;
             return false;
         }
 
@@ -314,7 +392,8 @@ public:
         // Start recording
         if (!obs_output_start(output)) {
             const char* error = obs_output_get_last_error(output);
-            std::cerr << "Failed to start recording: " << (error ? error : "unknown error") << std::endl;
+            std::cerr << "Failed to start recording for stream " << stream_id
+                      << ": " << (error ? error : "unknown error") << std::endl;
             return false;
         }
 
@@ -322,7 +401,7 @@ public:
         start_time = std::chrono::steady_clock::now();
         total_paused_duration = std::chrono::duration<double>(0);
 
-        std::cout << "Recording started: " << output_file << std::endl;
+        std::cout << "Recording started for stream " << stream_id << ": " << output_file << std::endl;
         return true;
     }
 
@@ -338,7 +417,7 @@ public:
         pause_time = std::chrono::steady_clock::now();
         state = StreamState::PAUSED;
 
-        std::cout << "Recording paused (simulated)" << std::endl;
+        std::cout << "Recording paused for stream " << stream_id << " (simulated)" << std::endl;
         return true;
     }
 
@@ -365,7 +444,7 @@ public:
         }
 
         state = StreamState::STOPPED;
-        std::cout << "Recording stopped: " << output_file << std::endl;
+        std::cout << "Recording stopped for stream " << stream_id << ": " << output_file << std::endl;
         return true;
     }
 
@@ -411,6 +490,49 @@ public:
     }
 
 private:
+    void allocate_channels() {
+        std::lock_guard<std::mutex> lock(channel_mutex);
+
+        // Initialize channel array if needed
+        if (used_channels.empty()) {
+            used_channels.resize(MAX_CHANNELS, false);
+        }
+
+        // Find free channels
+        for (int i = 0; i < MAX_CHANNELS; ++i) {
+            if (!used_channels[i]) {
+                if (video_channel < 0) {
+                    video_channel = i;
+                    used_channels[i] = true;
+                } else if (audio_channel < 0) {
+                    audio_channel = i;
+                    used_channels[i] = true;
+                } else if (desktop_channel < 0) {
+                    desktop_channel = i;
+                    used_channels[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    void release_channels() {
+        std::lock_guard<std::mutex> lock(channel_mutex);
+
+        if (video_channel >= 0 && video_channel < MAX_CHANNELS) {
+            used_channels[video_channel] = false;
+            obs_set_output_source(video_channel, nullptr);
+        }
+        if (audio_channel >= 0 && audio_channel < MAX_CHANNELS) {
+            used_channels[audio_channel] = false;
+            obs_set_output_source(audio_channel, nullptr);
+        }
+        if (desktop_channel >= 0 && desktop_channel < MAX_CHANNELS) {
+            used_channels[desktop_channel] = false;
+            obs_set_output_source(desktop_channel, nullptr);
+        }
+    }
+
     void cleanup() {
         std::lock_guard<std::mutex> lock(state_mutex);
 
@@ -428,10 +550,8 @@ private:
             }
         }
 
-        // Clear output sources
-        for (int i = 0; i < 6; i++) {
-            obs_set_output_source(i, nullptr);
-        }
+        // Release channels
+        release_channels();
 
         // Release resources
         if (output) {
@@ -474,20 +594,36 @@ private:
             scene = nullptr;
         }
 
-        obs_shutdown();
         std::cout << "Cleanup complete for stream: " << stream_id << std::endl;
     }
 };
 
+// Initialize static members
+std::mutex StreamRecorder::channel_mutex;
+std::vector<bool> StreamRecorder::used_channels;
+
 class RecordingManager {
 private:
     std::unique_ptr<httplib::Server> server;
-    std::map<std::string, std::unique_ptr<OBSRecorder>> recorders;
+    std::map<std::string, std::unique_ptr<StreamRecorder>> recorders;
     std::mutex recorders_mutex;
 
 public:
     RecordingManager() : server(std::make_unique<httplib::Server>()) {
+        // Initialize OBS core once
+        if (!OBSCore::getInstance()->initialize()) {
+            throw std::runtime_error("Failed to initialize OBS core");
+        }
         setup_routes();
+    }
+
+    ~RecordingManager() {
+        // Clean up all recorders before shutting down OBS
+        {
+            std::lock_guard<std::mutex> lock(recorders_mutex);
+            recorders.clear();
+        }
+        // OBS core will be cleaned up automatically by its destructor
     }
 
     void setup_routes() {
@@ -522,16 +658,7 @@ public:
                 }
 
                 // Create new recorder
-                auto recorder = std::make_unique<OBSRecorder>(stream_id);
-
-                if (!recorder->initialize()) {
-                    json error_response;
-                    error_response["error"] = "Failed to initialize recorder";
-                    error_response["stream_id"] = stream_id;
-                    res.status = 500;
-                    res.set_content(error_response.dump(), "application/json");
-                    return;
-                }
+                auto recorder = std::make_unique<StreamRecorder>(stream_id);
 
                 if (!recorder->setup_sources()) {
                     json error_response;
@@ -704,6 +831,8 @@ public:
 
                 json response;
                 response["streams"] = json::array();
+                response["active_streams"] = recorders.size();
+                response["obs_core_initialized"] = OBSCore::getInstance()->isInitialized();
 
                 for (const auto& pair : recorders) {
                     response["streams"].push_back(pair.second->get_status());
@@ -725,13 +854,14 @@ public:
         server->Get("/health", [](const httplib::Request& req, httplib::Response& res) {
             json response;
             response["status"] = "healthy";
-            response["service"] = "obs-recorder-api";
+            response["service"] = "obs-singleton-recorder-api";
+            response["obs_core"] = OBSCore::getInstance()->isInitialized() ? "initialized" : "not initialized";
             res.set_content(response.dump(), "application/json");
         });
     }
 
     void start_server(const std::string& host = "0.0.0.0", int port = 8080) {
-        std::cout << "Starting OBS Recording API server on " << host << ":" << port << std::endl;
+        std::cout << "Starting OBS Singleton Recording API server on " << host << ":" << port << std::endl;
         std::cout << "Available endpoints:" << std::endl;
         std::cout << "  POST   /v1/stream/{streamId}/start" << std::endl;
         std::cout << "  PUT    /v1/stream/{streamId}/pause" << std::endl;
@@ -740,6 +870,7 @@ public:
         std::cout << "  GET    /v1/streams" << std::endl;
         std::cout << "  GET    /health" << std::endl;
         std::cout << "\nRecordings will be saved to: /tmp/" << std::endl;
+        std::cout << "Using singleton OBS core for all recordings" << std::endl;
         std::cout << "Press Ctrl+C to stop the server" << std::endl;
 
         server->listen(host, port);
@@ -756,8 +887,8 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    std::cout << "OBS MP4 Recording API for M1 MacBook Pro" << std::endl;
-    std::cout << "=======================================" << std::endl;
+    std::cout << "OBS Singleton MP4 Recording API for M1 MacBook Pro" << std::endl;
+    std::cout << "=================================================" << std::endl;
 
     // Parse command line arguments
     std::string host = "0.0.0.0";
